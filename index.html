@@ -27,7 +27,7 @@
     <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
 
 <script>
-const socket = io('http://localhost:3000/', {
+const socket = io('https://socket-io-sjd1.onrender.com/', {
     transports: ['polling'] // Forces a stable connection over LocalTunnel
 }); // e.g., http://localhost:3000
 socket.on('connect', () => {

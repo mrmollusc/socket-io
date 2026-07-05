@@ -58,6 +58,7 @@ io.on('connection', (socket) => {
 });
 
 // Start the server ONCE
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 const PORT = process.env.PORT || 3000; 
 server.listen(PORT, () => {
     console.log(`🚀 Multiplayer Server Running Online! Access locally at http://localhost:${PORT}`);
