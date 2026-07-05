@@ -27,7 +27,9 @@
     <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
 
 <script>
-const socket = io('https://sixty-frogs-drop.loca.lt/'); // e.g., http://localhost:3000
+const socket = io('http://localhost:3000/', {
+    transports: ['polling'] // Forces a stable connection over LocalTunnel
+}); // e.g., http://localhost:3000
 socket.on('connect', () => {
     console.log('✅ Connected to the multiplayer server successfully!');
 });
@@ -74,161 +76,205 @@ socket.on('connect_error', (error) => {
     init();
 
     function runGame() {
-        // --- 1. INITIALIZE MATTER.JS PHYSICS ---
-        const engine = Matter.Engine.create({
-            gravity: { x: 0, y: 0 }
-        });
+    // --- 1. INITIALIZE MATTER.JS PHYSICS ---
+    const engine = Matter.Engine.create({
+        gravity: { x: 0, y: 0 }
+    });
 
-        // --- 2. CREATE MAP PLATFORMS ---
-        function createStaticBlock(x, y, w, h, color = 0xe74c3c) {
-            const body = Matter.Bodies.rectangle(x, y, w, h, { isStatic: true, friction: 0.0 });
-            Matter.Composite.add(engine.world, body);
+    // Tracking array to reference bouncy balls for position synchronisation
+    const ballBodiesArray = [];
 
-            const graphic = new PIXI.Graphics();
-            graphic.rect(-w / 2, -h / 2, w, h).fill(color);
-            graphic.position.set(x, y);
-            app.stage.addChild(graphic);
-            return body;
-        }
+    // --- 2. CREATE MAP PLATFORMS ---
+    function createStaticBlock(x, y, w, h, color = 0xe74c3c) {
+        const body = Matter.Bodies.rectangle(x, y, w, h, { isStatic: true, friction: 0.0 });
+        Matter.Composite.add(engine.world, body);
 
-        // Walls and ledges
-        createStaticBlock(WIDTH / 2, HEIGHT - WALL_THICKNESS / 2, WIDTH, WALL_THICKNESS); 
-        createStaticBlock(WALL_THICKNESS / 2, HEIGHT / 2, WALL_THICKNESS, HEIGHT);        
-        createStaticBlock(WIDTH - WALL_THICKNESS / 2, HEIGHT / 2, WALL_THICKNESS, HEIGHT); 
-        createStaticBlock(250, 450, 200, 20, 0x34495e);
-        createStaticBlock(550, 320, 200, 20, 0x34495e);
-        createStaticBlock(300, 200, 150, 20, 0x34495e);
+        const graphic = new PIXI.Graphics();
+        graphic.rect(-w / 2, -h / 2, w, h).fill(color);
+        graphic.position.set(x, y);
+        app.stage.addChild(graphic);
+        return body;
+    }
 
-        // --- 3. CREATE BOTH PLAYERS ---
-        const size = 100;
-        const commonConfig = {
-            restitution: 0.0,
+    // Walls and ledges
+    createStaticBlock(WIDTH / 2, HEIGHT - WALL_THICKNESS / 2, WIDTH, WALL_THICKNESS); 
+    createStaticBlock(WALL_THICKNESS / 2, HEIGHT / 2, WALL_THICKNESS, HEIGHT);        
+    createStaticBlock(WIDTH - WALL_THICKNESS / 2, HEIGHT / 2, WALL_THICKNESS, HEIGHT); 
+    createStaticBlock(250, 450, 200, 20, 0x34495e);
+    createStaticBlock(550, 320, 200, 20, 0x34495e);
+    createStaticBlock(300, 200, 150, 20, 0x34495e);
+
+    // --- 3. CREATE BOTH PLAYERS ---
+    const size = 100;
+    const commonConfig = {
+        restitution: 0.0,
+        friction: 0.0,
+        inertia: Infinity, 
+        frictionAir: 0.1     
+    };
+
+    let p1Body = null;
+    let p1Graphic = null;
+    let p2Body = null;
+    let p2Graphic = null;
+
+    async function initPlayer() {
+        p1Body = Matter.Bodies.rectangle(200, 100, size, size, commonConfig);
+        Matter.Composite.add(engine.world, p1Body);
+
+        const texture = await PIXI.Assets.load('https://raw.githubusercontent.com/mrmollusc/socket-io/main/raly.webp');
+        p1Graphic = new PIXI.Sprite(texture);
+        p1Graphic.anchor.set(0.5); 
+        p1Graphic.width = size;
+        p1Graphic.height = size;
+        app.stage.addChild(p1Graphic);
+    }
+    initPlayer();
+
+    async function initPlayer2() {
+        p2Body = Matter.Bodies.rectangle(600, 100, size, size, commonConfig);
+        Matter.Composite.add(engine.world, p2Body);
+
+        const texture = await PIXI.Assets.load('https://raw.githubusercontent.com/mrmollusc/socket-io/main/pinguin.png');
+        p2Graphic = new PIXI.Sprite(texture);
+        p2Graphic.anchor.set(0.5); 
+        p2Graphic.width = size;
+        p2Graphic.height = size;
+        app.stage.addChild(p2Graphic);
+    }
+    initPlayer2();
+
+    // --- 4. NETWORK CAPTURING KEYBOARD SIGNALS ---
+    window.addEventListener('keydown', (e) => {
+        localKeys[e.code] = true; 
+        socket.emit('playerMove', { keys: localKeys });
+    });
+    window.addEventListener('keyup', (e) => {
+        localKeys[e.code] = false;
+        socket.emit('playerMove', { keys: localKeys });
+    });
+
+    // --- 5. SPAWN BOUNCY BALL TARGETS ---
+    function spawnBouncyBall(x, y, radius = 20) {
+        const ballBody = Matter.Bodies.circle(x, y, radius, {
+            restitution: 0.85,
             friction: 0.0,
-            inertia: Infinity, 
-            frictionAir: 0.1     
-        };
-
-        let p1Body = null;
-        let p1Graphic = null;
-        let p2Body = null;
-        let p2Graphic = null;
-
-        async function initPlayer() {
-            p1Body = Matter.Bodies.rectangle(200, 100, size, size, commonConfig);
-            Matter.Composite.add(engine.world, p1Body);
-
-            const texture = await PIXI.Assets.load('raly.webp');
-            p1Graphic = new PIXI.Sprite(texture);
-            p1Graphic.anchor.set(0.5); 
-            p1Graphic.width = size;
-            p1Graphic.height = size;
-            app.stage.addChild(p1Graphic);
-        }
-        initPlayer();
-
-        async function initPlayer2() {
-            p2Body = Matter.Bodies.rectangle(600, 100, size, size, commonConfig);
-            Matter.Composite.add(engine.world, p2Body);
-
-            const texture = await PIXI.Assets.load('./pinguin.png');
-            p2Graphic = new PIXI.Sprite(texture);
-            p2Graphic.anchor.set(0.5); 
-            p2Graphic.width = size;
-            p2Graphic.height = size;
-            app.stage.addChild(p2Graphic);
-        }
-        initPlayer2();
-
-        // --- 4. NETWORK CAPTURING KEYBOARD SIGNALS ---
-        window.addEventListener('keydown', (e) => {
-            localKeys[e.code] = true; 
-            socket.emit('playerMove', { keys: localKeys });
+            density: 0.01
         });
-        window.addEventListener('keyup', (e) => {
-            localKeys[e.code] = false;
-            socket.emit('playerMove', { keys: localKeys });
-        });
+        Matter.Composite.add(engine.world, ballBody);
 
-        // --- 5. SPAWN BOUNCY BALL TARGETS ---
-        function spawnBouncyBall(x, y, radius = 20) {
-            const ballBody = Matter.Bodies.circle(x, y, radius, {
-                restitution: 0.85,
-                friction: 0.0,
-                density: 0.01
-            });
-            Matter.Composite.add(engine.world, ballBody);
+        // Store the body inside the tracker array
+        ballBodiesArray.push(ballBody);
 
-            const colors = [0xe74c3c, 0xf1c40f, 0x9b59b6, 0xe67e22];
-            const randomColor = colors[Math.floor(Math.random() * colors.length)];
+        const colors = [0xe74c3c, 0xf1c40f, 0x9b59b6, 0xe67e22];
+        const randomColor = colors[Math.floor(Math.random() * colors.length)];
 
-            const ballGraphic = new PIXI.Graphics();
-            ballGraphic.circle(0, 0, radius).fill(randomColor);
-            app.stage.addChild(ballGraphic);
+        const ballGraphic = new PIXI.Graphics();
+        ballGraphic.circle(0, 0, radius).fill(randomColor);
+        app.stage.addChild(ballGraphic);
 
-            app.ticker.add(() => {
-                ballGraphic.x = ballBody.position.x;
-                ballGraphic.y = ballBody.position.y;
-                ballGraphic.rotation = ballBody.angle;
-            });
-        }
-
-        spawnBouncyBall(300, 50, 20);
-        spawnBouncyBall(400, 80, 25);
-        spawnBouncyBall(550, 40, 15);
-
-        // --- 6. UNIFIED TICK ENGINE ---
-        app.ticker.add((tickerInstance) => {
-            // Safety check: Exit tick frame if bodies aren't loaded into memory yet
-            if (!p1Body || !p2Body || !p1Graphic || !p2Graphic) return;
-
-            const delta = tickerInstance.deltaTime;
-            Matter.Engine.update(engine, delta * (1000 / 60));
-
-            const ACCEL = 1;      
-            const FRICTION = 0.0;
-            const MAX_SPEED = 10;
-
-            // DYNAMIC INPUT ROUTING BASE
-            // If you are Player 1, look at your local keyboard keys. Otherwise, look at what the server sent.
-            let p1KeysToUse = (myPlayerNumber === 1) ? localKeys : remoteP1Keys;
-            let p2KeysToUse = (myPlayerNumber === 2) ? localKeys : remoteP2Keys;
-
-            // --- PROCESS PLAYER 1 (WASD MAP BASED ON ROUTED KEYS) ---
-            let v1x = p1Body.velocity.x;
-            let v1y = p1Body.velocity.y;
-
-            if (p1KeysToUse['KeyD']) v1x = Math.min(v1x + ACCEL, MAX_SPEED);
-            else if (p1KeysToUse['KeyA']) v1x = Math.max(v1x - ACCEL, -MAX_SPEED);
-            else v1x = 0;
-
-            if (p1KeysToUse['KeyS']) v1y = Math.min(v1y + ACCEL, MAX_SPEED); 
-            else if (p1KeysToUse['KeyW']) v1y = Math.max(v1y - ACCEL, -MAX_SPEED);
-            else v1y = 0;
-
-            Matter.Body.setVelocity(p1Body, { x: v1x, y: v1y });
-
-            // --- PROCESS PLAYER 2 (WASD MAP BASED ON ROUTED KEYS) ---
-            let v2x = p2Body.velocity.x;
-            let v2y = p2Body.velocity.y;
-
-            if (p2KeysToUse['KeyD']) v2x = Math.min(v2x + ACCEL, MAX_SPEED);
-            else if (p2KeysToUse['KeyA']) v2x = Math.max(v2x - ACCEL, -MAX_SPEED);
-            else v2x = 0;
-
-            if (p2KeysToUse['KeyS']) v2y = Math.min(v2y + ACCEL, MAX_SPEED); 
-            else if (p2KeysToUse['KeyW']) v2y = Math.max(v2y - ACCEL, -MAX_SPEED);
-            else v2y = 0;
-
-            Matter.Body.setVelocity(p2Body, { x: v2x, y: v2y });
-
-            // --- UPDATE VISUAL POSITIONS ---
-            p1Graphic.x = p1Body.position.x;
-            p1Graphic.y = p1Body.position.y;
-
-            p2Graphic.x = p2Body.position.x;
-            p2Graphic.y = p2Body.position.y;
+        app.ticker.add(() => {
+            ballGraphic.x = ballBody.position.x;
+            ballGraphic.y = ballBody.position.y;
+            ballGraphic.rotation = ballBody.angle;
         });
     }
+
+    spawnBouncyBall(300, 50, 20);
+    spawnBouncyBall(400, 80, 25);
+    spawnBouncyBall(550, 40, 15);
+
+    // --- LISTEN FOR AUTHORITATIVE POSITION SYNC PACKETS ---
+    socket.on('positionsUpdated', (data) => {
+        // Player 2 overrides local simulations to lock positions with Player 1
+        if (myPlayerNumber === 2) {
+            if (p1Body) {
+                Matter.Body.setPosition(p1Body, data.p1.pos);
+                Matter.Body.setVelocity(p1Body, data.p1.vel);
+            }
+            if (p2Body) {
+                Matter.Body.setPosition(p2Body, data.p2.pos);
+                Matter.Body.setVelocity(p2Body, data.p2.vel);
+            }
+            
+            // Re-align all dynamic targets
+            data.balls.forEach(ballSync => {
+                const localBall = ballBodiesArray[ballSync.id];
+                if (localBall) {
+                    Matter.Body.setPosition(localBall, ballSync.pos);
+                    Matter.Body.setVelocity(localBall, ballSync.vel);
+                    Matter.Body.setAngle(localBall, ballSync.angle);
+                }
+            });
+        }
+    });
+
+    // --- 6. UNIFIED TICK ENGINE ---
+    app.ticker.add((tickerInstance) => {
+        if (!p1Body || !p2Body || !p1Graphic || !p2Graphic) return;
+
+        const delta = tickerInstance.deltaTime;
+        Matter.Engine.update(engine, delta * (1000 / 60));
+
+        const ACCEL = 1;      
+        const MAX_SPEED = 10;
+
+        let p1KeysToUse = (myPlayerNumber === 1) ? localKeys : remoteP1Keys;
+        let p2KeysToUse = (myPlayerNumber === 2) ? localKeys : remoteP2Keys;
+
+        // --- PROCESS PLAYER 1 (WASD) ---
+        let v1x = p1Body.velocity.x;
+        let v1y = p1Body.velocity.y;
+
+        if (p1KeysToUse['KeyD']) v1x = Math.min(v1x + ACCEL, MAX_SPEED);
+        else if (p1KeysToUse['KeyA']) v1x = Math.max(v1x - ACCEL, -MAX_SPEED);
+        else v1x = 0;
+
+        if (p1KeysToUse['KeyS']) v1y = Math.min(v1y + ACCEL, MAX_SPEED); 
+        else if (p1KeysToUse['KeyW']) v1y = Math.max(v1y - ACCEL, -MAX_SPEED);
+        else v1y = 0;
+
+        Matter.Body.setVelocity(p1Body, { x: v1x, y: v1y });
+
+        // --- PROCESS PLAYER 2 (WASD) ---
+        let v2x = p2Body.velocity.x;
+        let v2y = p2Body.velocity.y;
+
+        if (p2KeysToUse['KeyD']) v2x = Math.min(v2x + ACCEL, MAX_SPEED);
+        else if (p2KeysToUse['KeyA']) v2x = Math.max(v2x - ACCEL, -MAX_SPEED);
+        else v2x = 0;
+
+        if (p2KeysToUse['KeyS']) v2y = Math.min(v2y + ACCEL, MAX_SPEED); 
+        else if (p2KeysToUse['KeyW']) v2y = Math.max(v2y - ACCEL, -MAX_SPEED);
+        else v2y = 0;
+
+        Matter.Body.setVelocity(p2Body, { x: v2x, y: v2y });
+
+        // --- UPDATE VISUAL POSITIONS ---
+        p1Graphic.x = p1Body.position.x;
+        p1Graphic.y = p1Body.position.y;
+
+        p2Graphic.x = p2Body.position.x;
+        p2Graphic.y = p2Body.position.y;
+
+        // --- HOST BROADCAST ROUTINE ---
+        // Player 1 packs coordinates and velocities to keep Player 2 anchored
+        if (myPlayerNumber === 1) {
+            const ballData = ballBodiesArray.map((ball, index) => ({
+                id: index,
+                pos: { x: ball.position.x, y: ball.position.y },
+                vel: { x: ball.velocity.x, y: ball.velocity.y },
+                angle: ball.angle
+            }));
+
+            socket.emit('syncPositions', {
+                p1: { pos: { x: p1Body.position.x, y: p1Body.position.y }, vel: { x: p1Body.velocity.x, y: p1Body.velocity.y } },
+                p2: { pos: { x: p2Body.position.x, y: p2Body.position.y }, vel: { x: p2Body.velocity.x, y: p2Body.velocity.y } },
+                balls: ballData
+            });
+        }
+    });
+}
 </script>
 </body>
 </html>
