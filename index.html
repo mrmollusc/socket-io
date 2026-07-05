@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PixiJS v8 + Matter.js 2-Player Platformer</title>
+    <style>
+        body {
+            margin: 0;
+            background: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: sans-serif;
+        }
+        canvas {
+            border: 4px solid #333;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.19.0/dist/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/matter-js@0.19.0/build/matter.min.js"></script>
+
+<script>
+const socket = io('https://sixty-frogs-drop.loca.lt/'); // e.g., http://localhost:3000
+socket.on('connect', () => {
+    console.log('✅ Connected to the multiplayer server successfully!');
+});
+socket.on('connect_error', (error) => {
+    console.log('❌ Connection failed:', error.message);
+});
+    const WIDTH = 800;
+    const HEIGHT = 600;
+    const WALL_THICKNESS = 40;
+
+    const app = new PIXI.Application();
+
+    // --- MULTIPLAYER ROSTER HANDSHAKE VARIABLES ---
+    let myPlayerNumber = null;  
+    let localKeys = {};         
+    let remoteP1Keys = {};      
+    let remoteP2Keys = {};      
+
+    socket.on('assignPlayer', (num) => {
+        myPlayerNumber = num;
+        console.log(`You are Player ${myPlayerNumber}`);
+    });
+
+    socket.on('remoteMove', (data) => {
+        if (data.playerNum === 1) {
+            remoteP1Keys = data.keys;
+        } else if (data.playerNum === 2) {
+            remoteP2Keys = data.keys;
+        }
+    });
+
+    async function init() {
+        await app.init({
+            width: WIDTH,
+            height: HEIGHT,
+            backgroundColor: 0x2c3e50,
+            resolution: window.devicePixelRatio || 1,
+            autoDensity: true
+        });
+        document.body.appendChild(app.canvas);
+        runGame();
+    }
+
+    init();
+
+    function runGame() {
+        // --- 1. INITIALIZE MATTER.JS PHYSICS ---
+        const engine = Matter.Engine.create({
+            gravity: { x: 0, y: 0 }
+        });
+
+        // --- 2. CREATE MAP PLATFORMS ---
+        function createStaticBlock(x, y, w, h, color = 0xe74c3c) {
+            const body = Matter.Bodies.rectangle(x, y, w, h, { isStatic: true, friction: 0.0 });
+            Matter.Composite.add(engine.world, body);
+
+            const graphic = new PIXI.Graphics();
+            graphic.rect(-w / 2, -h / 2, w, h).fill(color);
+            graphic.position.set(x, y);
+            app.stage.addChild(graphic);
+            return body;
+        }
+
+        // Walls and ledges
+        createStaticBlock(WIDTH / 2, HEIGHT - WALL_THICKNESS / 2, WIDTH, WALL_THICKNESS); 
+        createStaticBlock(WALL_THICKNESS / 2, HEIGHT / 2, WALL_THICKNESS, HEIGHT);        
+        createStaticBlock(WIDTH - WALL_THICKNESS / 2, HEIGHT / 2, WALL_THICKNESS, HEIGHT); 
+        createStaticBlock(250, 450, 200, 20, 0x34495e);
+        createStaticBlock(550, 320, 200, 20, 0x34495e);
+        createStaticBlock(300, 200, 150, 20, 0x34495e);
+
+        // --- 3. CREATE BOTH PLAYERS ---
+        const size = 100;
+        const commonConfig = {
+            restitution: 0.0,
+            friction: 0.0,
+            inertia: Infinity, 
+            frictionAir: 0.1     
+        };
+
+        let p1Body = null;
+        let p1Graphic = null;
+        let p2Body = null;
+        let p2Graphic = null;
+
+        async function initPlayer() {
+            p1Body = Matter.Bodies.rectangle(200, 100, size, size, commonConfig);
+            Matter.Composite.add(engine.world, p1Body);
+
+            const texture = await PIXI.Assets.load('raly.webp');
+            p1Graphic = new PIXI.Sprite(texture);
+            p1Graphic.anchor.set(0.5); 
+            p1Graphic.width = size;
+            p1Graphic.height = size;
+            app.stage.addChild(p1Graphic);
+        }
+        initPlayer();
+
+        async function initPlayer2() {
+            p2Body = Matter.Bodies.rectangle(600, 100, size, size, commonConfig);
+            Matter.Composite.add(engine.world, p2Body);
+
+            const texture = await PIXI.Assets.load('./pinguin.png');
+            p2Graphic = new PIXI.Sprite(texture);
+            p2Graphic.anchor.set(0.5); 
+            p2Graphic.width = size;
+            p2Graphic.height = size;
+            app.stage.addChild(p2Graphic);
+        }
+        initPlayer2();
+
+        // --- 4. NETWORK CAPTURING KEYBOARD SIGNALS ---
+        window.addEventListener('keydown', (e) => {
+            localKeys[e.code] = true; 
+            socket.emit('playerMove', { keys: localKeys });
+        });
+        window.addEventListener('keyup', (e) => {
+            localKeys[e.code] = false;
+            socket.emit('playerMove', { keys: localKeys });
+        });
+
+        // --- 5. SPAWN BOUNCY BALL TARGETS ---
+        function spawnBouncyBall(x, y, radius = 20) {
+            const ballBody = Matter.Bodies.circle(x, y, radius, {
+                restitution: 0.85,
+                friction: 0.0,
+                density: 0.01
+            });
+            Matter.Composite.add(engine.world, ballBody);
+
+            const colors = [0xe74c3c, 0xf1c40f, 0x9b59b6, 0xe67e22];
+            const randomColor = colors[Math.floor(Math.random() * colors.length)];
+
+            const ballGraphic = new PIXI.Graphics();
+            ballGraphic.circle(0, 0, radius).fill(randomColor);
+            app.stage.addChild(ballGraphic);
+
+            app.ticker.add(() => {
+                ballGraphic.x = ballBody.position.x;
+                ballGraphic.y = ballBody.position.y;
+                ballGraphic.rotation = ballBody.angle;
+            });
+        }
+
+        spawnBouncyBall(300, 50, 20);
+        spawnBouncyBall(400, 80, 25);
+        spawnBouncyBall(550, 40, 15);
+
+        // --- 6. UNIFIED TICK ENGINE ---
+        app.ticker.add((tickerInstance) => {
+            // Safety check: Exit tick frame if bodies aren't loaded into memory yet
+            if (!p1Body || !p2Body || !p1Graphic || !p2Graphic) return;
+
+            const delta = tickerInstance.deltaTime;
+            Matter.Engine.update(engine, delta * (1000 / 60));
+
+            const ACCEL = 1;      
+            const FRICTION = 0.0;
+            const MAX_SPEED = 10;
+
+            // DYNAMIC INPUT ROUTING BASE
+            // If you are Player 1, look at your local keyboard keys. Otherwise, look at what the server sent.
+            let p1KeysToUse = (myPlayerNumber === 1) ? localKeys : remoteP1Keys;
+            let p2KeysToUse = (myPlayerNumber === 2) ? localKeys : remoteP2Keys;
+
+            // --- PROCESS PLAYER 1 (WASD MAP BASED ON ROUTED KEYS) ---
+            let v1x = p1Body.velocity.x;
+            let v1y = p1Body.velocity.y;
+
+            if (p1KeysToUse['KeyD']) v1x = Math.min(v1x + ACCEL, MAX_SPEED);
+            else if (p1KeysToUse['KeyA']) v1x = Math.max(v1x - ACCEL, -MAX_SPEED);
+            else v1x = 0;
+
+            if (p1KeysToUse['KeyS']) v1y = Math.min(v1y + ACCEL, MAX_SPEED); 
+            else if (p1KeysToUse['KeyW']) v1y = Math.max(v1y - ACCEL, -MAX_SPEED);
+            else v1y = 0;
+
+            Matter.Body.setVelocity(p1Body, { x: v1x, y: v1y });
+
+            // --- PROCESS PLAYER 2 (WASD MAP BASED ON ROUTED KEYS) ---
+            let v2x = p2Body.velocity.x;
+            let v2y = p2Body.velocity.y;
+
+            if (p2KeysToUse['KeyD']) v2x = Math.min(v2x + ACCEL, MAX_SPEED);
+            else if (p2KeysToUse['KeyA']) v2x = Math.max(v2x - ACCEL, -MAX_SPEED);
+            else v2x = 0;
+
+            if (p2KeysToUse['KeyS']) v2y = Math.min(v2y + ACCEL, MAX_SPEED); 
+            else if (p2KeysToUse['KeyW']) v2y = Math.max(v2y - ACCEL, -MAX_SPEED);
+            else v2y = 0;
+
+            Matter.Body.setVelocity(p2Body, { x: v2x, y: v2y });
+
+            // --- UPDATE VISUAL POSITIONS ---
+            p1Graphic.x = p1Body.position.x;
+            p1Graphic.y = p1Body.position.y;
+
+            p2Graphic.x = p2Body.position.x;
+            p2Graphic.y = p2Body.position.y;
+        });
+    }
+</script>
+</body>
+</html>
